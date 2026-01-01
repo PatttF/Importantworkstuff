@@ -97,10 +97,29 @@
             margin-top: 30px;
             color: #0a0;
         }
+        
+        #soundBtn {
+            position: fixed;
+            top: 15px;
+            right: 100px;
+            background: linear-gradient(180deg, #c0c0c0, #808080);
+            border: 3px outset #ffffff;
+            padding: 8px 15px;
+            color: #000080;
+            font-family: 'Comic Sans MS', cursive;
+            font-weight: bold;
+            font-size: 14px;
+            z-index: 1000;
+            cursor: pointer;
+        }
+        #soundBtn:hover {
+            border-style: inset;
+        }
     </style>
 </head>
 <body>
     <a href="index.html" class="home-link">🏠 Home</a>
+    <button id="soundBtn">🔇 Sound</button>
     <div id="gameContainer">
         <canvas id="gameCanvas" width="448" height="496"></canvas>
         <div id="ui">
@@ -130,6 +149,115 @@
         const livesEl = document.getElementById('lives');
         const gameOverEl = document.getElementById('gameOver');
         const startScreenEl = document.getElementById('startScreen');
+        const soundBtn = document.getElementById('soundBtn');
+
+        // Sound system using Web Audio API
+        let audioCtx = null;
+        let soundEnabled = false; // Start muted by default
+        
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+        
+        function playSound(type) {
+            if (!soundEnabled || !audioCtx) return;
+            
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            const now = audioCtx.currentTime;
+            
+            switch(type) {
+                case 'waka':
+                    // Classic waka-waka sound - alternating pitch
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(wakaToggle ? 261 : 392, now);
+                    gain.gain.setValueAtTime(0.08, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+                    osc.start(now);
+                    osc.stop(now + 0.08);
+                    wakaToggle = !wakaToggle;
+                    break;
+                    
+                case 'power':
+                    // Power pellet - descending sweep
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(800, now);
+                    osc.frequency.exponentialRampToValueAtTime(200, now + 0.3);
+                    gain.gain.setValueAtTime(0.15, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+                    osc.start(now);
+                    osc.stop(now + 0.3);
+                    break;
+                    
+                case 'ghost':
+                    // Eating ghost - rising chirp
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(200, now);
+                    osc.frequency.exponentialRampToValueAtTime(1000, now + 0.15);
+                    gain.gain.setValueAtTime(0.12, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+                    osc.start(now);
+                    osc.stop(now + 0.15);
+                    break;
+                    
+                case 'death':
+                    // Death sound - descending wail
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(500, now);
+                    osc.frequency.exponentialRampToValueAtTime(80, now + 0.8);
+                    gain.gain.setValueAtTime(0.15, now);
+                    gain.gain.setValueAtTime(0.15, now + 0.5);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+                    osc.start(now);
+                    osc.stop(now + 0.8);
+                    break;
+                    
+                case 'levelup':
+                    // Level complete - victory fanfare
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(523, now);
+                    osc.frequency.setValueAtTime(659, now + 0.1);
+                    osc.frequency.setValueAtTime(784, now + 0.2);
+                    osc.frequency.setValueAtTime(1047, now + 0.3);
+                    gain.gain.setValueAtTime(0.12, now);
+                    gain.gain.setValueAtTime(0.12, now + 0.35);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+                    osc.start(now);
+                    osc.stop(now + 0.5);
+                    break;
+                    
+                case 'start':
+                    // Game start jingle
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(262, now);
+                    osc.frequency.setValueAtTime(330, now + 0.15);
+                    osc.frequency.setValueAtTime(392, now + 0.3);
+                    osc.frequency.setValueAtTime(523, now + 0.45);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.setValueAtTime(0.1, now + 0.5);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+                    osc.start(now);
+                    osc.stop(now + 0.6);
+                    break;
+            }
+        }
+        
+        let wakaToggle = false;
+        
+        // Toggle sound
+        soundBtn.addEventListener('click', () => {
+            initAudio();
+            soundEnabled = !soundEnabled;
+            soundBtn.textContent = soundEnabled ? '🔊 Sound' : '🔇 Sound';
+            if (soundEnabled && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        });
 
         // Tile size
         const T = 16;
@@ -526,6 +654,9 @@
         function drawMaze() {
             const warpAmount = Math.sin(globalTime * 0.02) * mazeWarp;
             
+            // Calculate player movement speed for warp intensity
+            const playerSpeed = Math.sqrt(player.dir.x * player.dir.x + player.dir.y * player.dir.y);
+            
             for (let row = 0; row < ROWS; row++) {
                 for (let col = 0; col < COLS; col++) {
                     const tile = maze[row][col];
@@ -550,8 +681,17 @@
                         ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
                         
                         // Slightly warped position
-                        const wx = x + Math.sin(globalTime * 0.03 + row * 0.5) * warpAmount;
-                        const wy = y + Math.cos(globalTime * 0.03 + col * 0.5) * warpAmount;
+                        let wx = x + Math.sin(globalTime * 0.03 + row * 0.5) * warpAmount;
+                        let wy = y + Math.cos(globalTime * 0.03 + col * 0.5) * warpAmount;
+                        
+                        // Player proximity warp - tiles near player bend slightly away
+                        if (playerSpeed > 0 && dist < 80) {
+                            const warpStrength = (1 - dist / 80) * 2.5 * playerSpeed;
+                            const angle = Math.atan2(dy, dx);
+                            // Push tiles outward from player with slight spiral
+                            wx += Math.cos(angle + globalTime * 0.1) * warpStrength;
+                            wy += Math.sin(angle + globalTime * 0.1) * warpStrength;
+                        }
                         
                         ctx.fillRect(wx, wy, T, T);
                         
@@ -879,6 +1019,7 @@
                     dot.eaten = true;
                     score += 10;
                     spawnParticles(dot.x, dot.y, 3);
+                    playSound('waka');
                 }
             });
             
@@ -897,6 +1038,7 @@
                     flashIntensity = 0.5;
                     spawnParticles(pellet.x, pellet.y, 20, 5);
                     pulseWaves.push({ x: pellet.x, y: pellet.y, radius: 0, maxRadius: 200 });
+                    playSound('power');
                 }
             });
         }
@@ -1060,6 +1202,7 @@
                         screenShake.intensity = 15;
                         spawnParticles(ghost.x, ghost.y, 30, 6);
                         pulseWaves.push({ x: ghost.x, y: ghost.y, radius: 0, maxRadius: 100 });
+                        playSound('ghost');
                     } else {
                         playerDeath();
                     }
@@ -1078,6 +1221,7 @@
             screenShake.intensity = 20;
             flashIntensity = 0.8;
             spawnParticles(player.x, player.y, 50, 8);
+            playSound('death');
             pulseWaves.push({ x: player.x, y: player.y, radius: 0, maxRadius: 300 });
             
             livesEl.textContent = '●'.repeat(Math.max(0, lives));
@@ -1109,6 +1253,7 @@
                 flashIntensity = 1;
                 screenShake.intensity = 20;
                 mazeWarp = 10;
+                playSound('levelup');
                 
                 setTimeout(() => {
                     initMaze();
@@ -1200,6 +1345,7 @@
 
         // Start game
         function startGame() {
+            initAudio();
             gameState = 'playing';
             score = 0;
             level = 1;
@@ -1215,6 +1361,7 @@
             
             startScreenEl.style.display = 'none';
             gameOverEl.style.display = 'none';
+            playSound('start');
         }
 
         // Controls
