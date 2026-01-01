@@ -1075,16 +1075,16 @@
             enemies.forEach(enemy => {
                 enemy.depth -= enemy.speed;
                 
-                // Flippers move sideways occasionally
-                if (enemy.type === 'flipper' && Math.random() < 0.02) {
+                // Flippers move sideways much less often
+                if (enemy.type === 'flipper' && Math.random() < 0.005) {
                     enemy.segment = (enemy.segment + enemy.direction + segmentCount) % segmentCount;
                 }
                 
-                // Fuseballs move along rim when at surface
+                // Fuseballs move along rim much less often when at surface
                 if (enemy.type === 'fuseball' && enemy.depth <= 0) {
                     enemy.depth = 0;
                     enemy.rimTimer = (enemy.rimTimer || 0) + 1;
-                    if (enemy.rimTimer > 30) {
+                    if (enemy.rimTimer > 80) {
                         enemy.segment = (enemy.segment + enemy.direction + segmentCount) % segmentCount;
                         enemy.rimTimer = 0;
                     }
