@@ -1,0 +1,1161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GHOST MAZE</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+        }
+        
+        #gameContainer { position: relative; }
+        
+        canvas {
+            display: block;
+            border: 2px solid #0f0;
+            box-shadow: 0 0 20px #0f0, 0 0 40px #080, inset 0 0 20px rgba(0,255,0,0.1);
+            image-rendering: pixelated;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 14px;
+            color: #0f0;
+            text-shadow: 0 0 10px #0f0;
+            z-index: 10;
+        }
+        
+        #ui div { margin-bottom: 5px; }
+        
+        #gameOver, #startScreen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 20;
+            color: #0f0;
+            text-shadow: 0 0 20px #0f0;
+        }
+        
+        #gameOver {
+            display: none;
+            font-size: 32px;
+        }
+        
+        #startScreen h1 {
+            font-size: 36px;
+            margin-bottom: 20px;
+            animation: flicker 0.1s infinite;
+        }
+        
+        @keyframes flicker {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+        
+        #startScreen .subtitle {
+            font-size: 16px;
+            animation: blink 1s step-end infinite;
+        }
+        
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+        
+        #startScreen .controls {
+            font-size: 12px;
+            margin-top: 30px;
+            color: #0a0;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="448" height="496"></canvas>
+        <div id="ui">
+            <div>SCORE: <span id="score">0</span></div>
+            <div>LEVEL: <span id="level">1</span></div>
+            <div>LIVES: <span id="lives">●●●</span></div>
+        </div>
+        <div id="startScreen">
+            <h1>GHOST MAZE</h1>
+            <div class="subtitle">PRESS SPACE</div>
+            <div class="controls">
+                ← ↑ → ↓ or WASD<br>
+                NAVIGATE THE VOID
+            </div>
+        </div>
+        <div id="gameOver">
+            SYSTEM FAILURE
+            <div style="font-size: 14px; margin-top: 15px;">PRESS SPACE</div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const levelEl = document.getElementById('level');
+        const livesEl = document.getElementById('lives');
+        const gameOverEl = document.getElementById('gameOver');
+        const startScreenEl = document.getElementById('startScreen');
+
+        // Tile size
+        const T = 16;
+        const COLS = 28;
+        const ROWS = 31;
+        const TUNNEL_ROW = 14; // Row with wrap-around tunnel
+        const GHOST_HOUSE_ROW = 12; // Center row of ghost house
+        const PLAYER_START_ROW = 23;
+
+        let maze = [];
+        let dots = [];
+        let powerPellets = [];
+
+        // Procedural maze generation - creates unique playable mazes each level
+        function generateMaze(seed) {
+            // Seeded random
+            let rng = seed;
+            function random() {
+                rng = (rng * 1103515245 + 12345) & 0x7fffffff;
+                return rng / 0x7fffffff;
+            }
+            function randInt(min, max) {
+                return min + Math.floor(random() * (max - min + 1));
+            }
+            
+            const HALF = Math.floor(COLS / 2);
+            
+            // Start with all walls
+            maze = [];
+            for (let row = 0; row < ROWS; row++) {
+                maze[row] = [];
+                for (let col = 0; col < COLS; col++) {
+                    maze[row][col] = 1;
+                }
+            }
+            
+            // Carve out corridors using a pattern-based approach
+            // Choose a random pattern type for this level
+            const patternType = randInt(0, 3);
+            
+            // Always have these main horizontal corridors
+            // GHOST_HOUSE_ROW - 5 (row 7) ensures ghosts can escape after exiting
+            const baseHRows = [1, GHOST_HOUSE_ROW - 5, TUNNEL_ROW, GHOST_HOUSE_ROW + 4, PLAYER_START_ROW, ROWS - 3];
+            
+            // Add random extra horizontal corridors based on pattern
+            // Each pattern has a base set PLUS random variations
+            const extraHRows = [];
+            if (patternType === 0) {
+                // Dense horizontal pattern with random offsets
+                [3, 5, 7, 17, 19, 21, 25, 27].forEach(r => {
+                    extraHRows.push(r + randInt(-1, 1));
+                });
+            } else if (patternType === 1) {
+                // Sparse pattern with random additions
+                [4, 8, 18, 26].forEach(r => {
+                    extraHRows.push(r + randInt(-1, 1));
+                });
+                // Add 2-4 random corridors
+                for (let i = 0; i < randInt(2, 4); i++) {
+                    extraHRows.push(randInt(3, ROWS - 5));
+                }
+            } else if (patternType === 2) {
+                // Alternating pattern with shifts
+                const shift = randInt(0, 2);
+                [3, 6, 9, 17, 20, 25].forEach(r => {
+                    extraHRows.push(r + shift);
+                });
+            } else {
+                // Fully random pattern
+                const numRows = randInt(5, 9);
+                for (let i = 0; i < numRows; i++) {
+                    const r = randInt(2, ROWS - 4);
+                    if (r !== TUNNEL_ROW && r !== PLAYER_START_ROW && 
+                        (r < GHOST_HOUSE_ROW - 3 || r > GHOST_HOUSE_ROW + 3)) {
+                        extraHRows.push(r);
+                    }
+                }
+            }
+            
+            // Filter out invalid rows (near ghost house, etc)
+            const validHRows = extraHRows.filter(r => 
+                r > 1 && r < ROWS - 3 && 
+                r !== TUNNEL_ROW && r !== PLAYER_START_ROW &&
+                (r < GHOST_HOUSE_ROW - 3 || r > GHOST_HOUSE_ROW + 3)
+            );
+            
+            // Carve horizontal corridors
+            [...baseHRows, ...validHRows].forEach(row => {
+                if (row > 0 && row < ROWS - 2) {
+                    for (let col = 1; col < COLS - 1; col++) {
+                        // Skip ghost house
+                        if (row >= GHOST_HOUSE_ROW - 2 && row <= GHOST_HOUSE_ROW + 2 && col >= 10 && col <= 17) continue;
+                        maze[row][col] = 0;
+                    }
+                }
+            });
+            
+            // Vertical corridors - vary positions based on pattern
+            // Always include cols 9 and 18 for ghost house escape routes
+            let vCols = [1, 9, 18, 26]; // Always have edges and ghost house sides
+            if (patternType === 0) {
+                // Add columns with random offsets
+                [4, 12, 15, 23].forEach(c => {
+                    vCols.push(c + randInt(-1, 1));
+                });
+            } else if (patternType === 1) {
+                [6, 13, 14, 21].forEach(c => {
+                    vCols.push(c + randInt(-1, 1));
+                });
+            } else if (patternType === 2) {
+                [3, 7, 20, 24].forEach(c => {
+                    vCols.push(c + randInt(-1, 1));
+                });
+            } else {
+                // Random columns
+                for (let i = 0; i < randInt(3, 6); i++) {
+                    vCols.push(randInt(3, HALF - 2));
+                    vCols.push(COLS - 1 - randInt(3, HALF - 2));
+                }
+            }
+            
+            // Filter and dedupe vertical columns
+            vCols = [...new Set(vCols)].filter(c => c > 0 && c < COLS - 1);
+            
+            // Carve vertical corridors
+            vCols.forEach(col => {
+                for (let row = 1; row < ROWS - 2; row++) {
+                    // Skip ghost house area (but not the sides at col 9 and 18)
+                    if (row >= GHOST_HOUSE_ROW - 2 && row <= GHOST_HOUSE_ROW + 2 && col >= 10 && col <= 17) continue;
+                    maze[row][col] = 0;
+                }
+            });
+            
+            // Add some random connecting corridors
+            const numConnectors = randInt(4, 8);
+            for (let i = 0; i < numConnectors; i++) {
+                const startRow = randInt(2, ROWS - 4);
+                const startCol = randInt(2, HALF - 2);
+                const length = randInt(2, 5);
+                const horizontal = random() > 0.5;
+                
+                if (horizontal) {
+                    for (let c = 0; c < length && startCol + c < HALF - 1; c++) {
+                        if (startRow < GHOST_HOUSE_ROW - 3 || startRow > GHOST_HOUSE_ROW + 3) {
+                            maze[startRow][startCol + c] = 0;
+                            maze[startRow][COLS - 1 - startCol - c] = 0;
+                        }
+                    }
+                } else {
+                    for (let r = 0; r < length && startRow + r < ROWS - 3; r++) {
+                        const row = startRow + r;
+                        if (row < GHOST_HOUSE_ROW - 3 || row > GHOST_HOUSE_ROW + 3) {
+                            maze[row][startCol] = 0;
+                            maze[row][COLS - 1 - startCol] = 0;
+                        }
+                    }
+                }
+            }
+            
+            // Tunnel row - always fully open
+            for (let col = 0; col < COLS; col++) {
+                maze[TUNNEL_ROW][col] = 0;
+            }
+            maze[TUNNEL_ROW][0] = 2;
+            maze[TUNNEL_ROW][COLS - 1] = 2;
+            
+            // Ghost house
+            for (let row = GHOST_HOUSE_ROW - 1; row <= GHOST_HOUSE_ROW + 1; row++) {
+                for (let col = 11; col <= 16; col++) {
+                    maze[row][col] = 4;
+                }
+            }
+            // Ghost house walls
+            for (let col = 10; col <= 17; col++) {
+                maze[GHOST_HOUSE_ROW - 2][col] = 1;
+                maze[GHOST_HOUSE_ROW + 2][col] = 1;
+            }
+            for (let row = GHOST_HOUSE_ROW - 2; row <= GHOST_HOUSE_ROW + 2; row++) {
+                maze[row][10] = 1;
+                maze[row][17] = 1;
+            }
+            // Ghost house entrance
+            maze[GHOST_HOUSE_ROW - 2][13] = 4;
+            maze[GHOST_HOUSE_ROW - 2][14] = 4;
+            
+            // Clear paths around ghost house - FULL WIDTH corridors so ghosts can navigate
+            // Rows 5-9 all cleared full width so ghosts can move freely after exiting
+            for (let col = 1; col < COLS - 1; col++) {
+                maze[GHOST_HOUSE_ROW - 7][col] = 0; // Row 5
+                maze[GHOST_HOUSE_ROW - 6][col] = 0; // Row 6  
+                maze[GHOST_HOUSE_ROW - 5][col] = 0; // Row 7 - ghost exit row
+                maze[GHOST_HOUSE_ROW - 4][col] = 0; // Row 8
+                maze[GHOST_HOUSE_ROW - 3][col] = 0; // Row 9
+                maze[GHOST_HOUSE_ROW + 3][col] = 0; // Row 15 (below ghost house)
+                maze[GHOST_HOUSE_ROW + 4][col] = 0; // Row 16
+            }
+            for (let row = GHOST_HOUSE_ROW - 7; row <= GHOST_HOUSE_ROW + 4; row++) {
+                maze[row][9] = 0;
+                maze[row][18] = 0;
+            }
+            
+            // Player start area
+            for (let col = 10; col <= 17; col++) {
+                maze[PLAYER_START_ROW][col] = 0;
+                maze[PLAYER_START_ROW - 1][col] = 0;
+                maze[PLAYER_START_ROW + 1][col] = 0;
+            }
+            
+            // Ensure corners are accessible
+            maze[1][1] = 0; maze[1][2] = 0; maze[2][1] = 0;
+            maze[1][COLS-2] = 0; maze[1][COLS-3] = 0; maze[2][COLS-2] = 0;
+            maze[ROWS-3][1] = 0; maze[ROWS-4][1] = 0; maze[ROWS-3][2] = 0;
+            maze[ROWS-3][COLS-2] = 0; maze[ROWS-4][COLS-2] = 0; maze[ROWS-3][COLS-3] = 0;
+            
+            // Place dots
+            dots = [];
+            powerPellets = [];
+            
+            for (let row = 0; row < ROWS; row++) {
+                for (let col = 0; col < COLS; col++) {
+                    if (maze[row][col] === 0) {
+                        const nearGhostHouse = row >= GHOST_HOUSE_ROW - 3 && row <= GHOST_HOUSE_ROW + 3 && col >= 9 && col <= 18;
+                        const nearPlayerStart = row >= PLAYER_START_ROW - 1 && row <= PLAYER_START_ROW + 1 && col >= 12 && col <= 15;
+                        
+                        if (!nearGhostHouse && !nearPlayerStart) {
+                            dots.push({ x: col * T + T/2, y: row * T + T/2, eaten: false, pulse: random() * Math.PI * 2 });
+                        }
+                    }
+                }
+            }
+            
+            // Power pellets in corners
+            const corners = [
+                { row: 1, col: 1 },
+                { row: 1, col: COLS - 2 },
+                { row: ROWS - 3, col: 1 },
+                { row: ROWS - 3, col: COLS - 2 }
+            ];
+            
+            corners.forEach(pos => {
+                dots = dots.filter(d => !(Math.floor(d.x / T) === pos.col && Math.floor(d.y / T) === pos.row));
+                powerPellets.push({ x: pos.col * T + T/2, y: pos.row * T + T/2, eaten: false, pulse: random() * Math.PI * 2 });
+            });
+        }
+
+        // Game state
+        let gameState = 'start';
+        let score = 0;
+        let level = 1;
+        let lives = 3;
+        let globalTime = 0;
+        let frightTimer = 0;
+        let ghostsEaten = 0;
+        let dying = false; // Prevents multiple death triggers
+
+        // Visual effects
+        let screenShake = { x: 0, y: 0, intensity: 0 };
+        let particles = [];
+        let pulseWaves = [];
+        let flashIntensity = 0;
+        let mazeWarp = 0;
+        let glitchTimer = 0;
+
+        // Player
+        let player = {
+            x: 14 * T + T/2,
+            y: PLAYER_START_ROW * T + T/2,
+            dir: { x: 0, y: 0 },
+            nextDir: { x: -1, y: 0 },
+            speed: 2,
+            mouthAngle: 0,
+            mouthDir: 1,
+            trail: []
+        };
+
+        // Ghosts
+        let ghosts = [];
+        const GHOST_COLORS = ['#ff0000', '#ffb8ff', '#00ffff', '#ffb852']; // Classic but we'll override
+        const GHOST_NAMES = ['SHADOW', 'SPEEDY', 'BASHFUL', 'POKEY'];
+
+        function initMaze() {
+            // Generate a new procedural maze based on level
+            generateMaze(level * 12345 + 67890);
+        }
+
+        function initGhosts() {
+            const ghostY = GHOST_HOUSE_ROW * T + T/2;
+            const exitBase = Math.max(10, 30 - level * 5);
+            ghosts = [
+                // Ghost 0 starts outside already
+                { x: 14 * T + T/2, y: (GHOST_HOUSE_ROW - 5) * T + T/2, dir: { x: -1, y: 0 }, mode: 'chase', inHouse: false, exitTimer: 0, eaten: false, trail: [] },
+                { x: 12 * T + T/2, y: ghostY, dir: { x: 0, y: 0 }, mode: 'chase', inHouse: true, exitTimer: exitBase, eaten: false, trail: [] },
+                { x: 14 * T + T/2, y: ghostY, dir: { x: 0, y: 0 }, mode: 'chase', inHouse: true, exitTimer: exitBase * 2, eaten: false, trail: [] },
+                { x: 16 * T + T/2, y: ghostY, dir: { x: 0, y: 0 }, mode: 'chase', inHouse: true, exitTimer: exitBase * 3, eaten: false, trail: [] }
+            ];
+        }
+        
+        // Reset just player position (after death, keeps ghost eaten state)
+        function resetPlayerOnly() {
+            player.x = 14 * T + T/2;
+            player.y = PLAYER_START_ROW * T + T/2;
+            player.dir = { x: 0, y: 0 };
+            player.nextDir = { x: -1, y: 0 };
+            player.trail = [];
+            frightTimer = 0;
+            // Reset non-eaten ghosts to starting positions
+            const ghostY = GHOST_HOUSE_ROW * T + T/2;
+            const ghostStartX = [14, 12, 14, 16];
+            ghosts.forEach((ghost, i) => {
+                if (!ghost.eaten) {
+                    ghost.trail = [];
+                    ghost.dir = { x: 0, y: 0 };
+                    if (i === 0) {
+                        ghost.inHouse = false;
+                        ghost.x = 14 * T + T/2;
+                        ghost.y = (GHOST_HOUSE_ROW - 5) * T + T/2;
+                    } else {
+                        ghost.inHouse = true;
+                        ghost.exitTimer = 30 * i;
+                        ghost.y = ghostY;
+                        ghost.x = ghostStartX[i] * T + T/2;
+                    }
+                }
+            });
+        }
+
+        // Full reset for new level
+        function resetPositions() {
+            player.x = 14 * T + T/2;
+            player.y = PLAYER_START_ROW * T + T/2;
+            player.dir = { x: 0, y: 0 };
+            player.nextDir = { x: -1, y: 0 };
+            player.trail = [];
+            initGhosts();
+            frightTimer = 0;
+            ghostsEaten = 0;
+        }
+
+        // Check if position is walkable
+        function canMove(x, y, radius = 6) {
+            // Check corners of bounding box
+            const points = [
+                { x: x - radius, y: y - radius },
+                { x: x + radius, y: y - radius },
+                { x: x - radius, y: y + radius },
+                { x: x + radius, y: y + radius }
+            ];
+            
+            for (const p of points) {
+                const col = Math.floor(p.x / T);
+                const row = Math.floor(p.y / T);
+                
+                // Out of vertical bounds is always blocked
+                if (row < 0 || row >= ROWS) return false;
+                
+                // Tunnel wrap only on tunnel row
+                if (col < 0 || col >= COLS) {
+                    if (row === TUNNEL_ROW) continue; // Allow tunnel
+                    return false; // Block everywhere else
+                }
+                
+                if (maze[row][col] === 1) return false;
+            }
+            return true;
+        }
+
+        // Get tile at position
+        function getTile(x, y) {
+            const col = Math.floor(x / T);
+            const row = Math.floor(y / T);
+            if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return 2;
+            return maze[row][col];
+        }
+
+        // Spawn particles
+        function spawnParticles(x, y, count, speed = 3) {
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const vel = Math.random() * speed + speed * 0.5;
+                particles.push({
+                    x, y,
+                    vx: Math.cos(angle) * vel,
+                    vy: Math.sin(angle) * vel,
+                    life: 20 + Math.random() * 20,
+                    size: Math.random() * 3 + 1
+                });
+            }
+        }
+
+        // Draw maze with trippy effects
+        function drawMaze() {
+            const warpAmount = Math.sin(globalTime * 0.02) * mazeWarp;
+            
+            for (let row = 0; row < ROWS; row++) {
+                for (let col = 0; col < COLS; col++) {
+                    const tile = maze[row][col];
+                    if (tile === 1) {
+                        const x = col * T + screenShake.x;
+                        const y = row * T + screenShake.y;
+                        
+                        // Pulsing walls
+                        const pulse = Math.sin(globalTime * 0.05 + col * 0.2 + row * 0.3) * 0.3 + 0.7;
+                        const brightness = Math.floor(40 + pulse * 30);
+                        
+                        // Wall glow based on distance to player
+                        const dx = col * T + T/2 - player.x;
+                        const dy = row * T + T/2 - player.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        const glow = Math.max(0, 1 - dist / 150) * 0.5;
+                        
+                        const r = Math.floor(brightness * glow * 0.3);
+                        const g = Math.floor(brightness + glow * 100);
+                        const b = Math.floor(brightness * 0.5);
+                        
+                        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                        
+                        // Slightly warped position
+                        const wx = x + Math.sin(globalTime * 0.03 + row * 0.5) * warpAmount;
+                        const wy = y + Math.cos(globalTime * 0.03 + col * 0.5) * warpAmount;
+                        
+                        ctx.fillRect(wx, wy, T, T);
+                        
+                        // Inner darker part
+                        ctx.fillStyle = `rgb(${Math.floor(r*0.3)}, ${Math.floor(g*0.4)}, ${Math.floor(b*0.3)})`;
+                        ctx.fillRect(wx + 2, wy + 2, T - 4, T - 4);
+                    }
+                }
+            }
+        }
+
+        // Draw dots with trippy pulsing
+        function drawDots() {
+            dots.forEach(dot => {
+                if (dot.eaten) return;
+                
+                dot.pulse += 0.1;
+                const size = 2 + Math.sin(dot.pulse) * 1;
+                const brightness = 150 + Math.sin(dot.pulse * 2) * 50;
+                
+                ctx.fillStyle = `rgb(0, ${Math.floor(brightness)}, 0)`;
+                ctx.shadowColor = '#0f0';
+                ctx.shadowBlur = 5 + Math.sin(dot.pulse) * 3;
+                ctx.beginPath();
+                ctx.arc(dot.x + screenShake.x, dot.y + screenShake.y, size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.shadowBlur = 0;
+        }
+
+        // Draw power pellets with heavy effects
+        function drawPowerPellets() {
+            powerPellets.forEach(pellet => {
+                if (pellet.eaten) return;
+                
+                pellet.pulse += 0.15;
+                const size = 6 + Math.sin(pellet.pulse) * 2;
+                
+                // Outer glow rings
+                for (let i = 3; i >= 0; i--) {
+                    const ringSize = size + i * 4 + Math.sin(pellet.pulse + i) * 2;
+                    const alpha = 0.2 - i * 0.05;
+                    ctx.fillStyle = `rgba(0, 255, 0, ${alpha})`;
+                    ctx.beginPath();
+                    ctx.arc(pellet.x + screenShake.x, pellet.y + screenShake.y, ringSize, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                // Core
+                ctx.fillStyle = '#0f0';
+                ctx.shadowColor = '#0f0';
+                ctx.shadowBlur = 15;
+                ctx.beginPath();
+                ctx.arc(pellet.x + screenShake.x, pellet.y + screenShake.y, size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.shadowBlur = 0;
+        }
+
+        // Draw player with trail
+        function drawPlayer() {
+            const px = player.x + screenShake.x;
+            const py = player.y + screenShake.y;
+            
+            // Update trail
+            player.trail.push({ x: px, y: py, age: 0 });
+            if (player.trail.length > 15) player.trail.shift();
+            
+            // Draw trail
+            player.trail.forEach((t, i) => {
+                t.age++;
+                const alpha = (i / player.trail.length) * 0.5;
+                const size = (i / player.trail.length) * 10;
+                ctx.fillStyle = `rgba(0, 255, 0, ${alpha})`;
+                ctx.beginPath();
+                ctx.arc(t.x, t.y, size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            
+            // Animate mouth
+            player.mouthAngle += 0.3 * player.mouthDir;
+            if (player.mouthAngle > 0.5 || player.mouthAngle < 0.05) player.mouthDir *= -1;
+            
+            // Direction angle
+            let angle = 0;
+            if (player.dir.x === 1) angle = 0;
+            else if (player.dir.x === -1) angle = Math.PI;
+            else if (player.dir.y === -1) angle = -Math.PI / 2;
+            else if (player.dir.y === 1) angle = Math.PI / 2;
+            
+            // Glow effect
+            ctx.shadowColor = '#0f0';
+            ctx.shadowBlur = 20 + Math.sin(globalTime * 0.2) * 5;
+            
+            // Draw pacman
+            ctx.fillStyle = '#0f0';
+            ctx.beginPath();
+            ctx.arc(px, py, 12, angle + player.mouthAngle, angle + Math.PI * 2 - player.mouthAngle);
+            ctx.lineTo(px, py);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Eye
+            const eyeX = px + Math.cos(angle - 0.5) * 4;
+            const eyeY = py + Math.sin(angle - 0.5) * 4;
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(eyeX, eyeY, 2, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.shadowBlur = 0;
+        }
+
+        // Draw ghost with trippy effects
+        function drawGhost(ghost, index) {
+            // Don't draw eaten ghosts
+            if (ghost.eaten) return;
+            
+            const gx = ghost.x + screenShake.x;
+            const gy = ghost.y + screenShake.y;
+            
+            // Trail
+            ghost.trail.push({ x: gx, y: gy, age: 0 });
+            if (ghost.trail.length > 10) ghost.trail.shift();
+            
+            // Determine ghost visual state
+            let baseColor, eyeColor;
+            if (frightTimer > 0) {
+                // Frightened - blue/white flashing near end
+                if (frightTimer < 60 && Math.floor(globalTime / 5) % 2 === 0) {
+                    baseColor = { r: 200, g: 200, b: 200 };
+                } else {
+                    baseColor = { r: 0, g: 0, b: 150 };
+                }
+                eyeColor = '#fff';
+            } else {
+                // Normal - different shades of green for each ghost
+                const shades = [
+                    { r: 0, g: 255, b: 100 },  // Bright green
+                    { r: 100, g: 255, b: 150 }, // Light green
+                    { r: 0, g: 200, b: 200 },   // Cyan-green
+                    { r: 150, g: 255, b: 0 }    // Yellow-green
+                ];
+                baseColor = shades[index];
+                eyeColor = '#fff';
+            }
+            
+            // Draw trail
+            ghost.trail.forEach((t, i) => {
+                t.age++;
+                const alpha = (i / ghost.trail.length) * 0.3;
+                ctx.fillStyle = `rgba(${baseColor.r}, ${baseColor.g}, ${baseColor.b}, ${alpha})`;
+                ctx.beginPath();
+                ctx.arc(t.x, t.y, 8 * (i / ghost.trail.length), 0, Math.PI * 2);
+                ctx.fill();
+            });
+            
+            // Glow
+            ctx.shadowColor = `rgb(${baseColor.r}, ${baseColor.g}, ${baseColor.b})`;
+            ctx.shadowBlur = 15;
+            
+            // Body
+            ctx.fillStyle = `rgb(${baseColor.r}, ${baseColor.g}, ${baseColor.b})`;
+            ctx.beginPath();
+            ctx.arc(gx, gy - 2, 12, Math.PI, 0);
+            ctx.lineTo(gx + 12, gy + 8);
+            
+            // Wavy bottom
+            for (let i = 0; i < 4; i++) {
+                const waveX = gx + 12 - i * 6;
+                const waveY = gy + 8 + Math.sin(globalTime * 0.3 + i + index) * 3;
+                ctx.lineTo(waveX - 3, waveY + 4);
+                ctx.lineTo(waveX - 6, waveY);
+            }
+            ctx.closePath();
+            ctx.fill();
+            
+            // Eyes
+            ctx.fillStyle = eyeColor;
+            const eyeOffsetX = ghost.dir.x * 3;
+            const eyeOffsetY = ghost.dir.y * 2;
+            
+            ctx.beginPath();
+            ctx.arc(gx - 4 + eyeOffsetX, gy - 2 + eyeOffsetY, 4, 0, Math.PI * 2);
+            ctx.arc(gx + 4 + eyeOffsetX, gy - 2 + eyeOffsetY, 4, 0, Math.PI * 2);
+            ctx.fill();
+            
+            if (frightTimer <= 0) {
+                // Pupils
+                ctx.fillStyle = '#000';
+                ctx.beginPath();
+                ctx.arc(gx - 4 + eyeOffsetX * 1.5, gy - 2 + eyeOffsetY * 1.5, 2, 0, Math.PI * 2);
+                ctx.arc(gx + 4 + eyeOffsetX * 1.5, gy - 2 + eyeOffsetY * 1.5, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            ctx.shadowBlur = 0;
+        }
+
+        // Draw particles
+        function drawParticles() {
+            particles.forEach(p => {
+                const alpha = p.life / 40;
+                ctx.fillStyle = `rgba(0, 255, 0, ${alpha})`;
+                ctx.fillRect(p.x + screenShake.x - p.size/2, p.y + screenShake.y - p.size/2, p.size, p.size);
+            });
+        }
+
+        // Draw pulse waves
+        function drawPulseWaves() {
+            pulseWaves.forEach(wave => {
+                const progress = wave.radius / wave.maxRadius;
+                ctx.strokeStyle = `rgba(0, 255, 0, ${(1 - progress) * 0.5})`;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(wave.x + screenShake.x, wave.y + screenShake.y, wave.radius, 0, Math.PI * 2);
+                ctx.stroke();
+            });
+        }
+
+        // Update effects
+        function updateEffects() {
+            globalTime++;
+            
+            // Screen shake decay
+            if (screenShake.intensity > 0) {
+                screenShake.x = (Math.random() - 0.5) * screenShake.intensity;
+                screenShake.y = (Math.random() - 0.5) * screenShake.intensity;
+                screenShake.intensity *= 0.9;
+            } else {
+                screenShake.x = 0;
+                screenShake.y = 0;
+            }
+            
+            // Particles
+            particles.forEach(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vx *= 0.95;
+                p.vy *= 0.95;
+                p.life--;
+            });
+            particles = particles.filter(p => p.life > 0);
+            // Limit particles to prevent lag
+            if (particles.length > 200) particles = particles.slice(-200);
+            
+            // Pulse waves
+            pulseWaves.forEach(w => {
+                w.radius += 5;
+            });
+            pulseWaves = pulseWaves.filter(w => w.radius < w.maxRadius);
+            // Limit pulse waves
+            if (pulseWaves.length > 10) pulseWaves = pulseWaves.slice(-10);
+            
+            // Flash decay
+            flashIntensity *= 0.9;
+            
+            // Frightened timer
+            if (frightTimer > 0) frightTimer--;
+            
+            // Maze warp effect
+            mazeWarp = mazeWarp * 0.95;
+            
+            // Random glitch
+            if (Math.random() < 0.001) {
+                glitchTimer = 5;
+            }
+            if (glitchTimer > 0) glitchTimer--;
+        }
+
+        // Update player
+        function updatePlayer() {
+            // Check if we can turn (need to be centered on tile)
+            const col = Math.floor(player.x / T);
+            const row = Math.floor(player.y / T);
+            const centerX = col * T + T/2;
+            const centerY = row * T + T/2;
+            
+            const nearCenter = Math.abs(player.x - centerX) < 3 && Math.abs(player.y - centerY) < 3;
+            
+            if (nearCenter && (player.nextDir.x !== player.dir.x || player.nextDir.y !== player.dir.y)) {
+                const testX = centerX + player.nextDir.x * T/2;
+                const testY = centerY + player.nextDir.y * T/2;
+                if (canMove(testX, testY, 5)) {
+                    player.dir = { ...player.nextDir };
+                    player.x = centerX;
+                    player.y = centerY;
+                }
+            }
+            
+            // Move in current direction
+            if (player.dir.x !== 0 || player.dir.y !== 0) {
+                const moveX = player.x + player.dir.x * player.speed;
+                const moveY = player.y + player.dir.y * player.speed;
+                
+                // Check collision with walls - test both dimensions together
+                if (canMove(moveX, moveY, 6)) {
+                    player.x = moveX;
+                    player.y = moveY;
+                } else {
+                    // Hit a wall - snap to grid
+                    const col = Math.floor(player.x / T);
+                    const row = Math.floor(player.y / T);
+                    player.x = col * T + T/2;
+                    player.y = row * T + T/2;
+                    player.dir = { x: 0, y: 0 };
+                }
+            }
+            
+            // Tunnel wrap - only on tunnel row
+            const playerRow = Math.floor(player.y / T);
+            if (playerRow === TUNNEL_ROW) {
+                if (player.x < -T/2) player.x = COLS * T + T/2;
+                if (player.x > COLS * T + T/2) player.x = -T/2;
+            }
+            // Always clamp Y to playable area
+            player.y = Math.max(T + T/2, Math.min(player.y, (ROWS - 3) * T + T/2));
+            
+            // Collect dots
+            dots.forEach(dot => {
+                if (dot.eaten) return;
+                const dx = player.x - dot.x;
+                const dy = player.y - dot.y;
+                if (Math.sqrt(dx * dx + dy * dy) < 8) {
+                    dot.eaten = true;
+                    score += 10;
+                    spawnParticles(dot.x, dot.y, 3);
+                }
+            });
+            
+            // Collect power pellets
+            powerPellets.forEach(pellet => {
+                if (pellet.eaten) return;
+                const dx = player.x - pellet.x;
+                const dy = player.y - pellet.y;
+                if (Math.sqrt(dx * dx + dy * dy) < 12) {
+                    pellet.eaten = true;
+                    score += 50;
+                    frightTimer = 300; // 5 seconds at 60fps
+                    ghostsEaten = 0;
+                    screenShake.intensity = 10;
+                    mazeWarp = 5;
+                    flashIntensity = 0.5;
+                    spawnParticles(pellet.x, pellet.y, 20, 5);
+                    pulseWaves.push({ x: pellet.x, y: pellet.y, radius: 0, maxRadius: 200 });
+                }
+            });
+        }
+
+        // Ghost AI - super simple: wall=turn, no wall=go toward player
+        function updateGhosts() {
+            ghosts.forEach((ghost, index) => {
+                if (ghost.eaten) return;
+                
+                const speed = frightTimer > 0 ? 1.0 : Math.min(1.5 + level * 0.15, 2.5);
+                
+                // Check if position hits a wall
+                function hitsWall(x, y) {
+                    const col = Math.floor(x / T);
+                    const row = Math.floor(y / T);
+                    if (row === TUNNEL_ROW && (col < 0 || col >= COLS)) return false;
+                    if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return true;
+                    const tile = maze[row][col];
+                    return tile === 1 || (tile === 4 && !ghost.inHouse);
+                }
+                
+                // Exit house first
+                if (ghost.inHouse) {
+                    if (ghost.exitTimer > 0) { ghost.exitTimer--; return; }
+                    ghost.y -= 2;
+                    if (ghost.y <= 9 * T) {
+                        ghost.inHouse = false;
+                        ghost.y = 9 * T + T/2;
+                        ghost.x = 14 * T + T/2;
+                    }
+                    return;
+                }
+                
+                // Try to move toward player, but avoid walls
+                const dirs = [
+                    { x: 0, y: -1 },  // up
+                    { x: 0, y: 1 },   // down
+                    { x: -1, y: 0 },  // left
+                    { x: 1, y: 0 }    // right
+                ];
+                
+                // Check which directions are clear
+                const validDirs = dirs.filter(d => {
+                    const testX = ghost.x + d.x * (T/2 + 2);
+                    const testY = ghost.y + d.y * (T/2 + 2);
+                    return !hitsWall(testX, testY);
+                });
+                
+                // Pick best direction toward player (or random if frightened)
+                if (validDirs.length > 0) {
+                    let bestDir;
+                    if (frightTimer > 0) {
+                        bestDir = validDirs[Math.floor(Math.random() * validDirs.length)];
+                    } else {
+                        bestDir = validDirs[0];
+                        let bestDist = Infinity;
+                        for (const d of validDirs) {
+                            const dist = (ghost.x + d.x * T - player.x) ** 2 + 
+                                       (ghost.y + d.y * T - player.y) ** 2;
+                            if (dist < bestDist) {
+                                bestDist = dist;
+                                bestDir = d;
+                            }
+                        }
+                    }
+                    ghost.dir = bestDir;
+                }
+                
+                // Move
+                const nextX = ghost.x + ghost.dir.x * speed;
+                const nextY = ghost.y + ghost.dir.y * speed;
+                if (!hitsWall(nextX, nextY)) {
+                    ghost.x = nextX;
+                    ghost.y = nextY;
+                }
+                
+                // Tunnel wrap
+                if (ghost.x < -T) ghost.x = COLS * T;
+                if (ghost.x > COLS * T) ghost.x = -T;
+                
+                // Collision with player
+                const dist = Math.sqrt((player.x - ghost.x) ** 2 + (player.y - ghost.y) ** 2);
+                if (dist < 12 && !dying) {
+                    if (frightTimer > 0) {
+                        ghostsEaten++;
+                        score += 200 * Math.pow(2, ghostsEaten - 1);
+                        ghost.eaten = true;
+                        screenShake.intensity = 15;
+                        spawnParticles(ghost.x, ghost.y, 30, 6);
+                        pulseWaves.push({ x: ghost.x, y: ghost.y, radius: 0, maxRadius: 100 });
+                    } else {
+                        playerDeath();
+                    }
+                }
+            });
+            
+            if (globalTime % 600 === 0) {
+                ghosts.forEach(g => g.mode = g.mode === 'chase' ? 'scatter' : 'chase');
+            }
+        }
+
+        function playerDeath() {
+            if (dying) return; // Already dying
+            dying = true;
+            lives--;
+            screenShake.intensity = 20;
+            flashIntensity = 0.8;
+            spawnParticles(player.x, player.y, 50, 8);
+            pulseWaves.push({ x: player.x, y: player.y, radius: 0, maxRadius: 300 });
+            
+            livesEl.textContent = '●'.repeat(Math.max(0, lives));
+            
+            if (lives <= 0) {
+                gameState = 'gameover';
+                gameOverEl.style.display = 'block';
+                dying = false;
+            } else {
+                // Just reset positions, don't reset eaten ghosts
+                setTimeout(() => {
+                    resetPlayerOnly();
+                    dying = false;
+                }, 1000);
+            }
+        }
+
+        let levelTransitioning = false;
+        
+        function checkLevelComplete() {
+            if (levelTransitioning) return;
+            
+            // Level complete when all ghosts are eaten
+            const ghostsRemaining = ghosts.filter(g => !g.eaten).length;
+            if (ghostsRemaining === 0) {
+                levelTransitioning = true;
+                level++;
+                levelEl.textContent = level;
+                flashIntensity = 1;
+                screenShake.intensity = 20;
+                mazeWarp = 10;
+                
+                setTimeout(() => {
+                    initMaze();
+                    resetPositions();
+                    levelTransitioning = false;
+                }, 2000);
+            }
+        }
+
+        // Main update
+        function update() {
+            updateEffects();
+            
+            if (gameState !== 'playing') return;
+            
+            updatePlayer();
+            updateGhosts();
+            checkLevelComplete();
+            
+            // Update UI
+            scoreEl.textContent = score;
+            levelEl.textContent = level;
+            livesEl.textContent = '●'.repeat(Math.max(0, lives));
+        }
+
+        // Main draw
+        function draw() {
+            // Clear with fade effect
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Periodically full clear
+            if (globalTime % 30 === 0) {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+            
+            // Glitch effect
+            if (glitchTimer > 0) {
+                ctx.save();
+                ctx.translate(Math.random() * 10 - 5, Math.random() * 10 - 5);
+            }
+            
+            drawMaze();
+            drawPulseWaves();
+            drawDots();
+            drawPowerPellets();
+            
+            if (gameState === 'playing') {
+                ghosts.forEach((g, i) => drawGhost(g, i));
+                drawPlayer();
+            }
+            
+            drawParticles();
+            
+            if (glitchTimer > 0) {
+                ctx.restore();
+            }
+            
+            // Flash effect
+            if (flashIntensity > 0.01) {
+                ctx.fillStyle = `rgba(0, 255, 0, ${flashIntensity * 0.5})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+            
+            // CRT scanlines
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            for (let y = 0; y < canvas.height; y += 3) {
+                ctx.fillRect(0, y, canvas.width, 1);
+            }
+            
+            // Vignette
+            const gradient = ctx.createRadialGradient(
+                canvas.width / 2, canvas.height / 2, canvas.height * 0.3,
+                canvas.width / 2, canvas.height / 2, canvas.height * 0.8
+            );
+            gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0.5)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        // Game loop
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Start game
+        function startGame() {
+            gameState = 'playing';
+            score = 0;
+            level = 1;
+            lives = 3;
+            globalTime = 0;
+            particles = [];
+            pulseWaves = [];
+            dying = false;
+            levelTransitioning = false;
+            
+            initMaze();
+            resetPositions();
+            
+            startScreenEl.style.display = 'none';
+            gameOverEl.style.display = 'none';
+        }
+
+        // Controls
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.code === 'Enter') {
+                e.preventDefault();
+                if (gameState !== 'playing') {
+                    startGame();
+                }
+            }
+            
+            if (gameState !== 'playing') return;
+            
+            switch (e.code) {
+                case 'ArrowLeft':
+                case 'KeyA':
+                    player.nextDir = { x: -1, y: 0 };
+                    break;
+                case 'ArrowRight':
+                case 'KeyD':
+                    player.nextDir = { x: 1, y: 0 };
+                    break;
+                case 'ArrowUp':
+                case 'KeyW':
+                    player.nextDir = { x: 0, y: -1 };
+                    break;
+                case 'ArrowDown':
+                case 'KeyS':
+                    player.nextDir = { x: 0, y: 1 };
+                    break;
+            }
+        });
+
+        // Initialize and start
+        initMaze();
+        gameLoop();
+    </script>
+</body>
+</html>
