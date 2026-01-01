@@ -19,6 +19,24 @@
             min-height: 100vh;
             font-family: 'Courier New', monospace;
         }
+        
+        .home-link {
+            position: fixed;
+            top: 15px;
+            right: 15px;
+            background: linear-gradient(180deg, #c0c0c0, #808080);
+            border: 3px outset #ffffff;
+            padding: 8px 15px;
+            color: #000080;
+            text-decoration: none;
+            font-family: 'Comic Sans MS', cursive;
+            font-weight: bold;
+            font-size: 14px;
+            z-index: 1000;
+        }
+        .home-link:hover {
+            border-style: inset;
+        }
 
         .main-container {
             display: flex;
@@ -306,6 +324,7 @@
     </style>
 </head>
 <body>
+    <a href="index.html" class="home-link">🏠 Home</a>
     <div class="main-container">
     <div class="gameboy">
         <div class="screen-container">
