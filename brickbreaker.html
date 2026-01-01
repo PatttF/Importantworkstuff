@@ -150,10 +150,29 @@
             text-shadow: none;
             line-height: 2;
         }
+        
+        #soundBtn {
+            position: fixed;
+            top: 15px;
+            right: 100px;
+            background: linear-gradient(180deg, #c0c0c0, #808080);
+            border: 3px outset #ffffff;
+            padding: 8px 15px;
+            color: #000080;
+            font-family: 'Comic Sans MS', cursive;
+            font-weight: bold;
+            font-size: 14px;
+            z-index: 1000;
+            cursor: pointer;
+        }
+        #soundBtn:hover {
+            border-style: inset;
+        }
     </style>
 </head>
 <body>
     <a href="index.html" class="home-link">🏠 Home</a>
+    <button id="soundBtn">🔇 Sound</button>
     <div id="gameContainer">
         <canvas id="gameCanvas" width="320" height="280"></canvas>
         <div id="ui">
@@ -186,6 +205,95 @@
         const highEl = document.getElementById('high');
         const gameOverEl = document.getElementById('gameOver');
         const startScreenEl = document.getElementById('startScreen');
+        const soundBtn = document.getElementById('soundBtn');
+
+        // Sound system
+        let audioCtx = null;
+        let soundEnabled = false;
+        
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+        
+        function playSound(type) {
+            if (!soundEnabled || !audioCtx) return;
+            
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            const now = audioCtx.currentTime;
+            
+            switch(type) {
+                case 'bounce':
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(440, now);
+                    osc.frequency.exponentialRampToValueAtTime(220, now + 0.1);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                    osc.start(now);
+                    osc.stop(now + 0.1);
+                    break;
+                case 'brick':
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(587, now);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+                    osc.start(now);
+                    osc.stop(now + 0.08);
+                    break;
+                case 'powerup':
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(400, now);
+                    osc.frequency.exponentialRampToValueAtTime(800, now + 0.15);
+                    gain.gain.setValueAtTime(0.12, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+                    osc.start(now);
+                    osc.stop(now + 0.15);
+                    break;
+                case 'death':
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(400, now);
+                    osc.frequency.exponentialRampToValueAtTime(80, now + 0.5);
+                    gain.gain.setValueAtTime(0.15, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+                    osc.start(now);
+                    osc.stop(now + 0.5);
+                    break;
+                case 'levelup':
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(523, now);
+                    osc.frequency.setValueAtTime(659, now + 0.1);
+                    osc.frequency.setValueAtTime(784, now + 0.2);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+                    osc.start(now);
+                    osc.stop(now + 0.35);
+                    break;
+                case 'start':
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(262, now);
+                    osc.frequency.setValueAtTime(330, now + 0.1);
+                    osc.frequency.setValueAtTime(392, now + 0.2);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+                    osc.start(now);
+                    osc.stop(now + 0.35);
+                    break;
+            }
+        }
+        
+        soundBtn.addEventListener('click', () => {
+            initAudio();
+            soundEnabled = !soundEnabled;
+            soundBtn.textContent = soundEnabled ? '🔊 Sound' : '🔇 Sound';
+            if (soundEnabled && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        });
 
         // Game constants - scaled for 320x280 low-res
         const BRICK_ROWS = 8;
@@ -742,6 +850,7 @@
                     ball.dy = Math.sin(angle) * ball.speed;
                     ball.y = paddle.y - ball.radius;
                     
+                    playSound('bounce');
                     spawnParticles(ball.x, ball.y, 8, (globalTime * 2) % 360, 4);
                     
                     if (activePowerups.sticky > 0) {
@@ -785,6 +894,7 @@
                         
                         // Score with combo multiplier
                         score += 10 * comboCount * level;
+                        playSound('brick');
                         
                         if (brick.hits <= 0) {
                             spawnBrickExplosion(brick);
@@ -804,6 +914,7 @@
             
             if (balls.length === 0) {
                 lives--;
+                playSound('death');
                 if (lives <= 0) {
                     gameState = 'gameover';
                     gameOverEl.style.display = 'block';
@@ -825,6 +936,7 @@
                     powerup.x <= paddle.x + paddle.width / 2) {
                     powerup.collected = true;
                     applyPowerup(powerup);
+                    playSound('powerup');
                 }
             });
             powerups = powerups.filter(p => !p.collected && p.y < canvas.height + 20);
@@ -856,6 +968,7 @@
             // Level complete
             if (bricks.length === 0) {
                 level++;
+                playSound('levelup');
                 initBricks();
                 initBall();
                 paddle.width = 40;
@@ -939,6 +1052,7 @@
 
         // Start game
         function startGame() {
+            initAudio();
             gameState = 'playing';
             score = 0;
             level = 1;
@@ -950,6 +1064,7 @@
             powerups = [];
             lasers = [];
             activePowerups = {};
+            playSound('start');
             comboCount = 0;
             
             initBricks();

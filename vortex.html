@@ -151,10 +151,29 @@
             text-shadow: 0 0 15px #0f0;
             line-height: 2;
         }
+        
+        #soundBtn {
+            position: fixed;
+            top: 15px;
+            right: 100px;
+            background: linear-gradient(180deg, #c0c0c0, #808080);
+            border: 3px outset #ffffff;
+            padding: 8px 15px;
+            color: #000080;
+            font-family: 'Comic Sans MS', cursive;
+            font-weight: bold;
+            font-size: 14px;
+            z-index: 1000;
+            cursor: pointer;
+        }
+        #soundBtn:hover {
+            border-style: inset;
+        }
     </style>
 </head>
 <body>
     <a href="index.html" class="home-link">🏠 Home</a>
+    <button id="soundBtn">🔇 Sound</button>
     <div id="gameContainer">
         <canvas id="gameCanvas" width="800" height="800"></canvas>
         <div id="ui">
@@ -187,6 +206,228 @@
         const zapperEl = document.getElementById('zapper');
         const gameOverEl = document.getElementById('gameOver');
         const startScreenEl = document.getElementById('startScreen');
+        const soundBtn = document.getElementById('soundBtn');
+
+        // Sound system - aggressive PWM and triple saw waves
+        let audioCtx = null;
+        let soundEnabled = false;
+        
+        // Persistent 4-on-the-floor beat
+        let beatInterval = null;
+        let beatGain = null;
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        function startBeat() {
+            if (beatInterval) return;
+            if (!audioCtx) return;
+            if (!soundEnabled) return;
+            // Create a gain node for the beat so we can mute it instantly
+            if (!beatGain) {
+                beatGain = audioCtx.createGain();
+                beatGain.gain.value = 0.18;
+                beatGain.connect(audioCtx.destination);
+            }
+            // 120bpm = 0.5s per beat
+            beatInterval = setInterval(() => {
+                if (!soundEnabled || !audioCtx) return;
+                // Deep kick drum: short sine with pitch drop and click
+                const now = audioCtx.currentTime;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(60, now);
+                osc.frequency.exponentialRampToValueAtTime(32, now + 0.18);
+                gain.gain.setValueAtTime(1, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.19);
+                osc.connect(gain);
+                gain.connect(beatGain);
+                osc.start(now);
+                osc.stop(now + 0.2);
+                // Add a click for punch
+                const click = audioCtx.createOscillator();
+                const clickGain = audioCtx.createGain();
+                click.type = 'square';
+                click.frequency.setValueAtTime(800, now);
+                clickGain.gain.setValueAtTime(0.18, now);
+                clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
+                click.connect(clickGain);
+                clickGain.connect(beatGain);
+                click.start(now);
+                click.stop(now + 0.03);
+            }, 500);
+        }
+
+        function stopBeat() {
+            if (beatInterval) {
+                clearInterval(beatInterval);
+                beatInterval = null;
+            }
+        }
+        
+        function playSound(type) {
+            if (!soundEnabled || !audioCtx) return;
+            
+            const now = audioCtx.currentTime;
+            
+            switch(type) {
+                case 'shoot': {
+                    // Triple detuned sawtooth - aggressive laser
+                    const freqs = [880, 885, 875];
+                    freqs.forEach((freq, i) => {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'sawtooth';
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.frequency.setValueAtTime(freq, now);
+                        osc.frequency.exponentialRampToValueAtTime(55 + i * 5, now + 0.1);
+                        gain.gain.setValueAtTime(0.06, now);
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                        osc.start(now);
+                        osc.stop(now + 0.1);
+                    });
+                    break;
+                }
+                case 'enemy': {
+                    // PWM-style effect with two squares at different duty cycles
+                    const osc1 = audioCtx.createOscillator();
+                    const osc2 = audioCtx.createOscillator();
+                    const gain1 = audioCtx.createGain();
+                    const gain2 = audioCtx.createGain();
+                    osc1.type = 'square';
+                    osc2.type = 'sawtooth';
+                    osc1.connect(gain1);
+                    osc2.connect(gain2);
+                    gain1.connect(audioCtx.destination);
+                    gain2.connect(audioCtx.destination);
+                    // Detuned for thickness
+                    osc1.frequency.setValueAtTime(120, now);
+                    osc1.frequency.exponentialRampToValueAtTime(800, now + 0.12);
+                    osc2.frequency.setValueAtTime(125, now);
+                    osc2.frequency.exponentialRampToValueAtTime(790, now + 0.12);
+                    gain1.gain.setValueAtTime(0.1, now);
+                    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+                    gain2.gain.setValueAtTime(0.08, now);
+                    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+                    osc1.start(now);
+                    osc2.start(now);
+                    osc1.stop(now + 0.12);
+                    osc2.stop(now + 0.12);
+                    break;
+                }
+                case 'zapper': {
+                    // Massive triple saw sweep
+                    const freqs = [80, 85, 75];
+                    freqs.forEach((baseFreq, i) => {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'sawtooth';
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.frequency.setValueAtTime(baseFreq, now);
+                        osc.frequency.exponentialRampToValueAtTime(2500 + i * 100, now + 0.4);
+                        gain.gain.setValueAtTime(0.12, now);
+                        gain.gain.setValueAtTime(0.12, now + 0.25);
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+                        osc.start(now);
+                        osc.stop(now + 0.4);
+                    });
+                    break;
+                }
+                case 'death': {
+                    // Brutal descending triple saw with PWM pulse
+                    const freqs = [500, 502, 498];
+                    freqs.forEach((freq, i) => {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'sawtooth';
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.frequency.setValueAtTime(freq, now);
+                        osc.frequency.exponentialRampToValueAtTime(25 + i * 2, now + 1.0);
+                        gain.gain.setValueAtTime(0.1, now);
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + 1.0);
+                        osc.start(now);
+                        osc.stop(now + 1.0);
+                    });
+                    // Add harsh PWM pulse layer
+                    const pulse = audioCtx.createOscillator();
+                    const pulseGain = audioCtx.createGain();
+                    pulse.type = 'square';
+                    pulse.connect(pulseGain);
+                    pulseGain.connect(audioCtx.destination);
+                    pulse.frequency.setValueAtTime(80, now);
+                    pulse.frequency.setValueAtTime(60, now + 0.3);
+                    pulse.frequency.setValueAtTime(40, now + 0.6);
+                    pulseGain.gain.setValueAtTime(0.08, now);
+                    pulseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
+                    pulse.start(now);
+                    pulse.stop(now + 0.9);
+                    break;
+                }
+                case 'levelup': {
+                    // Triumphant triple saw arpeggios
+                    const notes = [523, 659, 784, 1047];
+                    notes.forEach((note, i) => {
+                        const time = now + i * 0.08;
+                        [note, note * 1.005, note * 0.995].forEach(freq => {
+                            const osc = audioCtx.createOscillator();
+                            const gain = audioCtx.createGain();
+                            osc.type = 'sawtooth';
+                            osc.connect(gain);
+                            gain.connect(audioCtx.destination);
+                            osc.frequency.setValueAtTime(freq, time);
+                            gain.gain.setValueAtTime(0.06, time);
+                            gain.gain.exponentialRampToValueAtTime(0.001, time + 0.15);
+                            osc.start(time);
+                            osc.stop(time + 0.15);
+                        });
+                    });
+                    break;
+                }
+                case 'start': {
+                    // Power-up triple saw chord
+                    const chords = [[262, 330, 392], [330, 392, 523], [392, 523, 659]];
+                    chords.forEach((chord, chordIdx) => {
+                        const time = now + chordIdx * 0.12;
+                        chord.forEach(note => {
+                            [note, note * 1.003, note * 0.997].forEach(freq => {
+                                const osc = audioCtx.createOscillator();
+                                const gain = audioCtx.createGain();
+                                osc.type = 'sawtooth';
+                                osc.connect(gain);
+                                gain.connect(audioCtx.destination);
+                                osc.frequency.setValueAtTime(freq, time);
+                                gain.gain.setValueAtTime(0.04, time);
+                                gain.gain.exponentialRampToValueAtTime(0.001, time + 0.15);
+                                osc.start(time);
+                                osc.stop(time + 0.15);
+                            });
+                        });
+                    });
+                    break;
+                }
+            }
+        }
+        
+        soundBtn.addEventListener('click', () => {
+            initAudio();
+            soundEnabled = !soundEnabled;
+            soundBtn.textContent = soundEnabled ? '🔊 Sound' : '🔇 Sound';
+            if (soundEnabled && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            if (soundEnabled) {
+                startBeat();
+                if (beatGain) beatGain.gain.value = 0.18;
+            } else {
+                if (beatGain) beatGain.gain.value = 0;
+            }
+        });
 
         // Game constants
         const CENTER_X = canvas.width / 2;
@@ -489,11 +730,71 @@
             });
         }
 
-        // Draw enemies
+        // Draw enemies with warp effect
         function drawEnemies() {
             enemies.forEach(enemy => {
                 const pos = getPositionOnSegment(enemy.segment, enemy.depth);
                 
+                // Draw intense warp distortion field around enemy
+                const warpIntensity = 0.7 + (1 - enemy.depth / DEPTH_LEVELS) * 0.8;
+                const warpRadius = 55 * warpIntensity;
+                const warpRings = 7;
+                
+                for (let ring = 0; ring < warpRings; ring++) {
+                    const ringProgress = ring / warpRings;
+                    const ringRadius = warpRadius * (0.3 + ringProgress * 0.9);
+                    const warpOffset = Math.sin(globalTime * 0.2 + ring * 0.6 + enemy.segment) * 15 * warpIntensity;
+                    const warpPhase = globalTime * 0.15 + ring * Math.PI / warpRings;
+                    
+                    ctx.save();
+                    ctx.translate(pos.x, pos.y);
+                    ctx.rotate(warpPhase);
+                    
+                    // Intense warped ellipse ring with glow
+                    const alpha = 0.35 * (1 - ringProgress * 0.7) * warpIntensity;
+                    const hue = (globalTime * 3 + enemy.segment * 40 + ring * 30) % 360;
+                    ctx.strokeStyle = `hsla(${hue}, 100%, 65%, ${alpha})`;
+                    ctx.shadowColor = `hsla(${hue}, 100%, 70%, ${alpha * 0.8})`;
+                    ctx.shadowBlur = 12 * warpIntensity;
+                    ctx.lineWidth = 3 - ring * 0.3;
+                    
+                    ctx.beginPath();
+                    for (let i = 0; i <= 32; i++) {
+                        const angle = (i / 32) * Math.PI * 2;
+                        const distort = Math.sin(angle * 4 + globalTime * 0.25 + ring) * warpOffset;
+                        const distort2 = Math.cos(angle * 2 - globalTime * 0.15 + ring * 0.5) * warpOffset * 0.5;
+                        const r = ringRadius + distort + distort2;
+                        const stretch = 1 + Math.sin(globalTime * 0.12 + ring) * 0.35;
+                        const x = Math.cos(angle) * r * stretch;
+                        const y = Math.sin(angle) * r / stretch;
+                        if (i === 0) ctx.moveTo(x, y);
+                        else ctx.lineTo(x, y);
+                    }
+                    ctx.closePath();
+                    ctx.stroke();
+                    
+                    // Inner energy tendrils on some rings
+                    if (ring % 2 === 0) {
+                        const tendrilCount = 6;
+                        ctx.lineWidth = 1.5;
+                        for (let t = 0; t < tendrilCount; t++) {
+                            const tendrilAngle = (t / tendrilCount) * Math.PI * 2 + globalTime * 0.08;
+                            const tendrilLen = ringRadius * (0.4 + Math.sin(globalTime * 0.3 + t) * 0.3);
+                            ctx.beginPath();
+                            ctx.moveTo(0, 0);
+                            const cx1 = Math.cos(tendrilAngle + 0.3) * tendrilLen * 0.5;
+                            const cy1 = Math.sin(tendrilAngle + 0.3) * tendrilLen * 0.5;
+                            const ex = Math.cos(tendrilAngle) * tendrilLen;
+                            const ey = Math.sin(tendrilAngle) * tendrilLen;
+                            ctx.quadraticCurveTo(cx1, cy1, ex, ey);
+                            ctx.stroke();
+                        }
+                    }
+                    
+                    ctx.restore();
+                }
+                
+                // Draw the actual enemy
                 ctx.save();
                 ctx.translate(pos.x, pos.y);
                 
@@ -815,6 +1116,7 @@
                         Math.abs(bullet.depth - enemy.depth) < 2) {
                         bullet.hit = true;
                         enemy.hit = true;
+                        playSound('enemy');
                         
                         const pos = getPositionOnSegment(enemy.segment, enemy.depth);
                         
@@ -918,6 +1220,7 @@
         // Player death
         function playerDeath() {
             lives--;
+            playSound('death');
             const pos = getPositionOnSegment(player.segment, 0);
             spawnExplosion(pos.x, pos.y, 60);
             screenShake.intensity = 30;
@@ -936,6 +1239,7 @@
         // Level complete
         function levelComplete() {
             level++;
+            playSound('levelup');
             currentShape = levelShapes[(level - 1) % levelShapes.length];
             segmentCount = currentShape.segments;
             player.segment = player.segment % segmentCount;
@@ -973,11 +1277,13 @@
             player.fireCooldown = 5; // Small cooldown between shots
             const pos = getPositionOnSegment(player.segment, 0);
             spawnParticles(pos.x, pos.y, 5, (globalTime * 3) % 360);
+            playSound('shoot');
         }
 
         // Super zapper - destroy all visible enemies
         function superZapper() {
             if (superZapperAvailable) {
+                playSound('zapper');
                 enemies.forEach(enemy => {
                     const pos = getPositionOnSegment(enemy.segment, enemy.depth);
                     spawnExplosion(pos.x, pos.y, Math.random() * 360);
@@ -1048,6 +1354,7 @@
 
         // Start game
         function startGame() {
+            initAudio();
             gameState = 'playing';
             score = 0;
             level = 1;
@@ -1066,9 +1373,13 @@
             superZapperAvailable = true;
             currentShape = levelShapes[0];
             segmentCount = currentShape.segments;
-            
             startScreenEl.style.display = 'none';
             gameOverEl.style.display = 'none';
+            playSound('start');
+            if (soundEnabled) {
+                startBeat();
+                if (beatGain) beatGain.gain.value = 0.18;
+            }
         }
 
         // Event listeners
@@ -1093,6 +1404,9 @@
             keys[e.code] = false;
         });
 
+        // Always start muted by default
+        soundEnabled = false;
+        soundBtn.textContent = '🔇 Sound';
         // Start the game loop
         gameLoop();
     </script>

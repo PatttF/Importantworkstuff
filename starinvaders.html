@@ -125,10 +125,29 @@
             text-shadow: 1px 1px #000;
             line-height: 2;
         }
+        
+        #soundBtn {
+            position: fixed;
+            top: 15px;
+            right: 100px;
+            background: linear-gradient(180deg, #c0c0c0, #808080);
+            border: 3px outset #ffffff;
+            padding: 8px 15px;
+            color: #000080;
+            font-family: 'Comic Sans MS', cursive;
+            font-weight: bold;
+            font-size: 14px;
+            z-index: 1000;
+            cursor: pointer;
+        }
+        #soundBtn:hover {
+            border-style: inset;
+        }
     </style>
 </head>
 <body>
     <a href="index.html" class="home-link">🏠 Home</a>
+    <button id="soundBtn">🔇 Sound</button>
     <div id="gameContainer">
         <canvas id="gameCanvas" width="256" height="224"></canvas>
         <div id="ui">
@@ -160,6 +179,96 @@
         const highEl = document.getElementById('high');
         const gameOverEl = document.getElementById('gameOver');
         const startScreenEl = document.getElementById('startScreen');
+        const soundBtn = document.getElementById('soundBtn');
+
+        // Sound system
+        let audioCtx = null;
+        let soundEnabled = false;
+        
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+        
+        function playSound(type) {
+            if (!soundEnabled || !audioCtx) return;
+            
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            const now = audioCtx.currentTime;
+            
+            switch(type) {
+                case 'shoot':
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(1200, now);
+                    osc.frequency.exponentialRampToValueAtTime(200, now + 0.1);
+                    gain.gain.setValueAtTime(0.08, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                    osc.start(now);
+                    osc.stop(now + 0.1);
+                    break;
+                case 'invader':
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(200, now);
+                    osc.frequency.exponentialRampToValueAtTime(80, now + 0.15);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+                    osc.start(now);
+                    osc.stop(now + 0.15);
+                    break;
+                case 'ufo':
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(400, now);
+                    osc.frequency.exponentialRampToValueAtTime(800, now + 0.2);
+                    gain.gain.setValueAtTime(0.12, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+                    osc.start(now);
+                    osc.stop(now + 0.2);
+                    break;
+                case 'death':
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(300, now);
+                    osc.frequency.exponentialRampToValueAtTime(50, now + 0.6);
+                    gain.gain.setValueAtTime(0.15, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+                    osc.start(now);
+                    osc.stop(now + 0.6);
+                    break;
+                case 'levelup':
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(523, now);
+                    osc.frequency.setValueAtTime(659, now + 0.1);
+                    osc.frequency.setValueAtTime(784, now + 0.2);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+                    osc.start(now);
+                    osc.stop(now + 0.35);
+                    break;
+                case 'start':
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(262, now);
+                    osc.frequency.setValueAtTime(330, now + 0.1);
+                    osc.frequency.setValueAtTime(392, now + 0.2);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+                    osc.start(now);
+                    osc.stop(now + 0.35);
+                    break;
+            }
+        }
+        
+        soundBtn.addEventListener('click', () => {
+            initAudio();
+            soundEnabled = !soundEnabled;
+            soundBtn.textContent = soundEnabled ? '🔊 Sound' : '🔇 Sound';
+            if (soundEnabled && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        });
 
         // SNES 256x224 resolution
         const W = 256;
@@ -790,6 +899,7 @@
                         bullet.hit = true;
                         inv.alive = false;
                         score += (inv.type + 1) * 10;
+                        playSound('invader');
                         const palette = inv.type === 0 ? PALETTE.invader0 : 
                                        inv.type === 1 ? PALETTE.invader1 : PALETTE.invader2;
                         spawnExplosion(inv.x + inv.width / 2, inv.y + inv.height / 2, palette);
@@ -803,6 +913,7 @@
                     bullet.y > ufo.y - 6 && bullet.y < ufo.y + 6) {
                     bullet.hit = true;
                     score += ufo.points;
+                    playSound('ufo');
                     spawnExplosion(ufo.x, ufo.y, PALETTE.ufo);
                     ufo = null;
                     ufoTimer = 0;
@@ -915,6 +1026,7 @@
         // Player death
         function playerDeath() {
             lives--;
+            playSound('death');
             spawnExplosion(player.x, player.y, PALETTE.player);
             screenShake.intensity = 6;
             
@@ -931,6 +1043,7 @@
         // Level complete
         function levelComplete() {
             level++;
+            playSound('levelup');
             invaderMoveDelay = Math.max(5, 30 - level * 2);
             invaderMoveTimer = 0;
             invaderDirection = 1;
@@ -960,6 +1073,7 @@
                     x: player.x,
                     y: player.y - 8
                 });
+                playSound('shoot');
             }
         }
 
@@ -1002,6 +1116,7 @@
 
         // Start game
         function startGame() {
+            initAudio();
             gameState = 'playing';
             score = 0;
             level = 1;
@@ -1023,6 +1138,7 @@
             
             startScreenEl.style.display = 'none';
             gameOverEl.style.display = 'none';
+            playSound('start');
         }
 
         // Event listeners
