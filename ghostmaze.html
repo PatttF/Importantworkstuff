@@ -418,9 +418,12 @@
         function initGhosts() {
             const ghostY = GHOST_HOUSE_ROW * T + T/2;
             const exitBase = Math.max(10, 30 - level * 5);
+            // Ghost 0 starts with random direction to not immediately chase player
+            const startDirs = [{ x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: -1 }];
+            const randomStartDir = startDirs[Math.floor(Math.random() * startDirs.length)];
             ghosts = [
-                // Ghost 0 starts outside already
-                { x: 14 * T + T/2, y: (GHOST_HOUSE_ROW - 5) * T + T/2, dir: { x: -1, y: 0 }, mode: 'chase', inHouse: false, exitTimer: 0, eaten: false, trail: [] },
+                // Ghost 0 starts outside already with random direction and brief scatter mode
+                { x: 14 * T + T/2, y: (GHOST_HOUSE_ROW - 5) * T + T/2, dir: randomStartDir, mode: 'scatter', inHouse: false, exitTimer: 0, eaten: false, trail: [], scatterTimer: 180 },
                 { x: 12 * T + T/2, y: ghostY, dir: { x: 0, y: 0 }, mode: 'chase', inHouse: true, exitTimer: exitBase, eaten: false, trail: [] },
                 { x: 14 * T + T/2, y: ghostY, dir: { x: 0, y: 0 }, mode: 'chase', inHouse: true, exitTimer: exitBase * 2, eaten: false, trail: [] },
                 { x: 16 * T + T/2, y: ghostY, dir: { x: 0, y: 0 }, mode: 'chase', inHouse: true, exitTimer: exitBase * 3, eaten: false, trail: [] }
@@ -898,12 +901,21 @@
             });
         }
 
-        // Ghost AI - super simple: wall=turn, no wall=go toward player
+        // Ghost AI - each ghost has unique behavior to spread them out
         function updateGhosts() {
+            // Scatter targets for each ghost (corners)
+            const scatterTargets = [
+                { x: (COLS - 3) * T, y: 1 * T },   // Top right
+                { x: 1 * T, y: 1 * T },             // Top left
+                { x: (COLS - 3) * T, y: (ROWS - 3) * T }, // Bottom right
+                { x: 1 * T, y: (ROWS - 3) * T }    // Bottom left
+            ];
+            
             ghosts.forEach((ghost, index) => {
                 if (ghost.eaten) return;
                 
-                const speed = frightTimer > 0 ? 1.0 : Math.min(1.5 + level * 0.15, 2.5);
+                // Ghosts get faster each level - base 1.5, +0.25 per level, max 3.5
+                const speed = frightTimer > 0 ? 1.0 : Math.min(1.5 + level * 0.25, 3.5);
                 
                 // Check if position hits a wall
                 function hitsWall(x, y) {
@@ -915,7 +927,7 @@
                     return tile === 1 || (tile === 4 && !ghost.inHouse);
                 }
                 
-                // Exit house first
+                // Exit house first - each ghost exits in different direction
                 if (ghost.inHouse) {
                     if (ghost.exitTimer > 0) { ghost.exitTimer--; return; }
                     ghost.y -= 2;
@@ -923,11 +935,65 @@
                         ghost.inHouse = false;
                         ghost.y = 9 * T + T/2;
                         ghost.x = 14 * T + T/2;
+                        // Set initial direction based on ghost index to spread them out
+                        const exitDirs = [
+                            { x: -1, y: 0 },  // Ghost 1: go left
+                            { x: 1, y: 0 },   // Ghost 2: go right
+                            { x: 0, y: -1 }   // Ghost 3: go up
+                        ];
+                        ghost.dir = exitDirs[index - 1] || { x: -1, y: 0 };
+                        // Give ghosts scatter time after exiting to spread out
+                        ghost.scatterTimer = 120 + index * 60;
                     }
                     return;
                 }
                 
-                // Try to move toward player, but avoid walls
+                // Calculate target based on ghost personality
+                let targetX, targetY;
+                const distToPlayer = Math.sqrt((ghost.x - player.x) ** 2 + (ghost.y - player.y) ** 2);
+                
+                // Handle scatter timer for initial spread-out behavior
+                if (ghost.scatterTimer && ghost.scatterTimer > 0) {
+                    ghost.scatterTimer--;
+                    // During scatter, target the assigned corner
+                    targetX = scatterTargets[index].x;
+                    targetY = scatterTargets[index].y;
+                }
+                // Each ghost has different behavior
+                else if (index === 0) {
+                    // SHADOW (red): Direct chase, always targets player
+                    targetX = player.x;
+                    targetY = player.y;
+                } else if (index === 1) {
+                    // SPEEDY (pink): Targets 4 tiles ahead of player's direction
+                    targetX = player.x + player.dir.x * T * 4;
+                    targetY = player.y + player.dir.y * T * 4;
+                } else if (index === 2) {
+                    // BASHFUL (cyan): Complex - uses vector from Shadow to target
+                    // Or scatter to corner if far from player
+                    if (distToPlayer > T * 8) {
+                        targetX = scatterTargets[index].x;
+                        targetY = scatterTargets[index].y;
+                    } else {
+                        // Target is 2x the vector from Shadow to 2 tiles ahead of player
+                        const shadow = ghosts[0];
+                        const aheadX = player.x + player.dir.x * T * 2;
+                        const aheadY = player.y + player.dir.y * T * 2;
+                        targetX = aheadX + (aheadX - shadow.x);
+                        targetY = aheadY + (aheadY - shadow.y);
+                    }
+                } else {
+                    // POKEY (orange): Chases when far, scatters to corner when close
+                    if (distToPlayer > T * 8) {
+                        targetX = player.x;
+                        targetY = player.y;
+                    } else {
+                        targetX = scatterTargets[index].x;
+                        targetY = scatterTargets[index].y;
+                    }
+                }
+                
+                // Try to move toward target, but avoid walls
                 const dirs = [
                     { x: 0, y: -1 },  // up
                     { x: 0, y: 1 },   // down
@@ -935,24 +1001,34 @@
                     { x: 1, y: 0 }    // right
                 ];
                 
-                // Check which directions are clear
+                // Check which directions are clear (also prevent 180 degree turns except at dead ends)
                 const validDirs = dirs.filter(d => {
+                    // Prevent reversing direction unless it's the only option
+                    const isReverse = d.x === -ghost.dir.x && d.y === -ghost.dir.y && 
+                                     (ghost.dir.x !== 0 || ghost.dir.y !== 0);
+                    const testX = ghost.x + d.x * (T/2 + 2);
+                    const testY = ghost.y + d.y * (T/2 + 2);
+                    return !hitsWall(testX, testY) && !isReverse;
+                });
+                
+                // If no valid dirs (dead end), allow reverse
+                const availableDirs = validDirs.length > 0 ? validDirs : dirs.filter(d => {
                     const testX = ghost.x + d.x * (T/2 + 2);
                     const testY = ghost.y + d.y * (T/2 + 2);
                     return !hitsWall(testX, testY);
                 });
                 
-                // Pick best direction toward player (or random if frightened)
-                if (validDirs.length > 0) {
+                // Pick best direction toward target (or random if frightened)
+                if (availableDirs.length > 0) {
                     let bestDir;
                     if (frightTimer > 0) {
-                        bestDir = validDirs[Math.floor(Math.random() * validDirs.length)];
+                        bestDir = availableDirs[Math.floor(Math.random() * availableDirs.length)];
                     } else {
-                        bestDir = validDirs[0];
+                        bestDir = availableDirs[0];
                         let bestDist = Infinity;
-                        for (const d of validDirs) {
-                            const dist = (ghost.x + d.x * T - player.x) ** 2 + 
-                                       (ghost.y + d.y * T - player.y) ** 2;
+                        for (const d of availableDirs) {
+                            const dist = (ghost.x + d.x * T - targetX) ** 2 + 
+                                       (ghost.y + d.y * T - targetY) ** 2;
                             if (dist < bestDist) {
                                 bestDist = dist;
                                 bestDir = d;
